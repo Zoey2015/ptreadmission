@@ -1,3 +1,16 @@
+---
+title: "Machine Learning Class Project"
+author: "Lyna Truong"
+date: "8/27/2017"
+output: html_document
+---
+
+#Describe the problem
+I am trying to predict risk of readmission (within 30 days) of diabetes patients and identify some of the critical risk factors for readmission. 
+
+#Importing the Dataset
+```{r}
+library(psych)
 library(caret)
 library(gmodels)
 library(randomForest)
@@ -6,3 +19,108 @@ library(C50)
 library(rpart)
 diabetes <- read.csv("dataset_diabetes/diabetic_data.csv")
 id_map <- read.csv("dataset_diabetes/IDs_mapping.csv")
+str(diabetes)
+```
+
+#Cleaning the Dataset
+```{r}
+diabetes$admission_type_id <- factor(diabetes$admission_type_id)
+diabetes$admission_source_id <- factor(diabetes$admission_source_id)
+diabetes$discharge_disposition_id <- factor(diabetes$discharge_disposition_id)
+diabetes <- diabetes[, -c(1,2)]
+
+#Assess data for constant values that can be omitted
+sapply(diabetes, table)
+#Medications to omit because there appears to be a lack of variation: acetohexamide, tolbutamide, troglitazone, tolazamide, examide, citoglipton, glipizide.metformin, glimepiride.pioglitazone, metformin.rosiglitazone, metformin.pioglitazone
+drop <- c("acetohexamide", "tolbutamide", "troglitazone", "tolazamide", "examide", "citoglipton", "glipizide.metformin", "glimepiride.pioglitazone", "metformin.rosiglitazone", "metformin.pioglitazone", "diag_1", "diag_2", "diag_3", "medical_specialty", "payer_code")
+diabetes <- diabetes[, !names(diabetes) %in% drop]
+
+#Assess data for missing values
+sapply(diabetes, function(x) sum(x == "?")/length(x))
+#weight has a very high percentage of missing data so will omit. For all other categories, will include another category for "missing"
+diabetes <- diabetes[, -4]
+
+#Assessing the numeric datapoints that are highly correlated
+diabetes_cor <- cor(diabetes[sapply(diabetes, is.numeric)])
+pairs.panels(diabetes[sapply(diabetes, is.numeric)])
+diabetes_highcor <- findCorrelation(diabetes_cor, cutoff = 0.6, names = FALSE) 
+diabetes_highcor
+#since this matrix is empty, this shows that none of the numeric values are highly correlated with each other
+
+#Change readmitted column to binary; only interested in if the patient was readmitted in less than 30 days and other
+diabetes$readmitted_30 <- as.factor(ifelse(diabetes$readmitted == ">30" | diabetes$readmitted == "NO", "0", "1"))
+diabetes$readmitted <- NULL
+```
+
+#Creating the Test and Training Datasets
+```{r}
+set.seed(123)
+trainIndex <- createDataPartition(diabetes$readmitted_30, p = 0.7, list = FALSE, times = 1)
+diabetes_Train <- diabetes[trainIndex, ]
+diabetes_Test <- diabetes[-trainIndex, ]
+diabetes_Train_lab <- as.factor(diabetes_Train$readmitted_30)
+diabetes_Test_lab <- as.factor(diabetes_Test$readmitted_30)
+```
+
+#Machine Learning Algorithms
+##Naive Bayes
+```{r}
+diabetes_bayes <- naiveBayes(diabetes_Train[-ncol(diabetes_Train)], diabetes_Train_lab)
+pred_diabetes_bayes <- predict(diabetes_bayes, diabetes_Test[-ncol(diabetes_Test)])
+
+missclass.rate.bayes <- mean(diabetes_Test_lab != pred_diabetes_bayes)
+missclass.rate.bayes
+CrossTable(diabetes_Test_lab, pred_diabetes_bayes)
+```
+
+##Logistic Regression
+```{r}
+diabetes_lm <- glm(readmitted_30 ~. , family = binomial, data = diabetes_Train)
+# predict(diabetes_lm, diabetes_Test) -> results in an error because the test dataset contains new levels for certain variables
+summary(diabetes_lm)
+
+par(mfrow = c(2,2))
+plot(diabetes_lm)
+```
+
+##Basic Decision Tree
+```{r}
+diabetes_tree <- C5.0(diabetes_Train[, -ncol(diabetes_Train)], diabetes_Train_lab)
+summary(diabetes_tree)
+diabetes_tree_pred <- predict(diabetes_tree, diabetes_Test[, -ncol(diabetes_Test)])
+missclass.rate.tree <- mean(diabetes_Test_lab != diabetes_tree_pred)
+missclass.rate.tree
+CrossTable(diabetes_Test_lab, diabetes_tree_pred, prop.chisq = FALSE, 
+           prop.c = FALSE, prop.r = FALSE,
+             dnn = c('actual class', 'predicted class'))
+```
+
+#Improving the Algorithms
+```{r, echo=TRUE}
+#Naive bayes using laplace = 1
+diabetes_bayes_2 <- naiveBayes(diabetes_Train[-ncol(diabetes_Train)], diabetes_Train_lab, laplace = 1)
+diabetes_bayes_pred_2 <- predict(diabetes_bayes_2, diabetes_Test[-ncol(diabetes_Test)])
+missclass.rate.bayes2 <- mean(diabetes_Test_lab != diabetes_bayes_pred_2)
+CrossTable(diabetes_Test_lab, diabetes_bayes_pred_2, prop.chisq = FALSE)
+missclass.rate.bayes2
+#missclassifcation rate is slightly lower by setting laplace to 1 and reduced the number of false positives from 1235 to 1226.
+
+#Logistic regression: will remove a few variables that were insignificant in the original model
+diabetes_lm2 <- update(diabetes_lm, . ~ . - repaglinide - nateglinide - chlorpropamide - glimepiride - glipizide - glyburide - pioglitazone - rosiglitazone - acarbose - miglitol)
+summary(diabetes_lm2)
+anova(diabetes_lm, diabetes_lm2, test ="Chisq")
+#This test shows us that the reduced model is enough!
+
+#Decision Tree
+#One method would be to implement adaptive boosting to our C5.0 decision tree by adding additional trials parameters. Below, I will implement adaptive boosting to our decision tree and start with 10 trials in an attempt to reduce the error rate.
+diabetes_boost10 <-C5.0(diabetes_Train[, -ncol(diabetes_Train)], diabetes_Train_lab, trials = 10)
+summary(diabetes_boost10)
+
+diabetes_boost10_pred <- predict(diabetes_boost10, diabetes_Test[-ncol(diabetes_Test)])
+missclass.rate.boost10 <- mean(diabetes_Test_lab != diabetes_boost10_pred)
+missclass.rate.boost10
+CrossTable(diabetes_Test_lab, diabetes_boost10_pred, prop.chisq = FALSE, prop.c = FALSE, prop.r = FALSE,
+             dnn = c('actual class', 'predicted class'))
+
+#model decreased the number of false positives, but increased the number of false negatives
+
