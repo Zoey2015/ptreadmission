@@ -1,0 +1,8 @@
+library(caret)
+library(gmodels)
+library(randomForest)
+library(e1071)
+library(C50)
+library(rpart)
+diabetes <- read.csv("dataset_diabetes/diabetic_data.csv")
+id_map <- read.csv("dataset_diabetes/IDs_mapping.csv")
